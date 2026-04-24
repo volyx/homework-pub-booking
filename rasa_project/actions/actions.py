@@ -1,63 +1,61 @@
-"""Custom Rasa actions for the homework.
+"""Rasa custom actions — reference implementation.
 
-This file runs inside the Rasa action server (`make rasa-actions`).
-It imports from rasa_sdk which is only available in that environment —
-don't try to run this file from your homework venv.
+ActionValidateBooking reads booking data from the UserUttered message's
+`metadata.booking` dict (which is how RasaStructuredHalf POSTs data) and
+validates it against the homework's business rules.
 
-Your task: implement ActionValidateBooking.
-
-IMPORTANT — how the booking data reaches the action:
-
-  Your RasaStructuredHalf POSTs to Rasa's REST webhook with this shape:
+Why metadata, not slots?
+  Our caller POSTs this payload to Rasa's REST webhook:
     {"sender": ..., "message": "/confirm_booking",
      "metadata": {"booking": {"venue_id": ..., "party_size": 6, ...}}}
 
   CALM's LLM command generator turns "/confirm_booking" into a
-  StartFlow(confirm_booking) command. But it does NOT automatically
-  read metadata into slots — that's your action's job.
+  StartFlow(confirm_booking) command. But it does NOT read metadata
+  into slots — that's our job. This action does it explicitly.
 
-  Inside `run()`, read metadata like this:
-    latest = tracker.latest_message or {}
-    meta = latest.get("metadata") or {}
-    booking = meta.get("booking") or {}
-    venue_id = booking.get("venue_id")
-    ...
-
-  Then SlotSet each value (so the responses can interpolate them)
-  AND emit a validation_error SlotSet with either a reason or None.
+  The action also SETS the slots it read, so downstream flow steps
+  (like the "booking_reference" response template) can use them.
 """
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
-# rasa_sdk is provided by the Rasa container, not the homework venv.
-# Your IDE may complain about these imports outside the container.
-# `SlotSet` is marked noqa: F401 — you'll use it when you implement
-# ActionValidateBooking.run().
-from rasa_sdk import Action, Tracker  # type: ignore[import-not-found]
-from rasa_sdk.events import SlotSet  # type: ignore[import-not-found]  # noqa: F401
-from rasa_sdk.executor import CollectingDispatcher  # type: ignore[import-not-found]
+from rasa_sdk import Action, Tracker
+from rasa_sdk.events import SlotSet
+from rasa_sdk.executor import CollectingDispatcher
 
-# Rules — see ASSIGNMENT.md §Ex6 and sample_data/catering.json.
 MAX_PARTY_SIZE_FOR_AUTO_BOOKING = 8
 MAX_DEPOSIT_FOR_AUTO_BOOKING_GBP = 300
 
 
+def _read_booking(tracker: Tracker) -> dict[str, Any]:
+    """Extract booking dict from metadata (primary) or slots (fallback)."""
+    latest = tracker.latest_message or {}
+    meta = latest.get("metadata") or {}
+    from_meta = meta.get("booking") if isinstance(meta, dict) else None
+    if isinstance(from_meta, dict):
+        return from_meta
+
+    # Fallback — assemble from slots if the caller populated them directly
+    return {
+        "venue_id": tracker.get_slot("venue_id"),
+        "date": tracker.get_slot("date"),
+        "time": tracker.get_slot("time"),
+        "party_size": tracker.get_slot("party_size"),
+        "deposit_gbp": tracker.get_slot("deposit_gbp"),
+    }
+
+
 class ActionValidateBooking(Action):
-    """Validate the proposed booking. Returns one of:
-
-    * Success: SlotSet("validation_error", None), plus a booking_reference.
-    * Rejection: SlotSet("validation_error", "<reason>").
-
-    The reason string is propagated to the user AND back to
-    RasaStructuredHalf via the response message.
+    """Validate the proposed booking against policy rules.
 
     Rules:
-      * party_size > 8         → reject with "party_too_large"
-      * deposit_gbp > 300      → reject with "deposit_too_high"
-      * missing required field → reject with "missing_<field>"
-      * otherwise              → success
+      * party_size > 8         → reject ("party_too_large")
+      * deposit_gbp > 300      → reject ("deposit_too_high")
+      * missing required field → reject ("missing_<field>")
+      * otherwise              → success, set booking_reference
     """
 
     def name(self) -> str:
@@ -69,29 +67,70 @@ class ActionValidateBooking(Action):
         tracker: Tracker,
         domain: dict[str, Any],
     ) -> list[dict[str, Any]]:
-        # Step 1: read booking data from metadata.
-        #    latest = tracker.latest_message or {}
-        #    meta = latest.get("metadata") or {}
-        #    booking = meta.get("booking") or {}
-        #
-        # Step 2: pull each field (venue_id, date, time, party_size, deposit_gbp).
-        #
-        # Step 3: SlotSet each field so downstream responses can interpolate them
-        # (e.g. "{party_size}", "{booking_reference}").
-        #
-        # Step 4: check the rules in order. Return early with the appropriate
-        # SlotSet("validation_error", "<reason>") when a rule fires.
-        #
-        # Step 5: if all rules pass, compute a booking reference and return
-        # SlotSet("validation_error", None) + SlotSet("booking_reference", ...).
-        #
-        # Happy-path reference format:
-        #   import hashlib
-        #   ref = "BK-" + hashlib.sha1(
-        #       f"{venue_id}|{date}|{time}|{party_size}".encode()
-        #   ).hexdigest()[:8].upper()
+        booking = _read_booking(tracker)
 
-        raise NotImplementedError(
-            "TODO Ex6: implement ActionValidateBooking.run — see this file's "
-            "docstring and ASSIGNMENT.md §Ex6 for the rules."
+        venue_id = booking.get("venue_id")
+        date = booking.get("date")
+        time_slot = booking.get("time")
+        party_size = booking.get("party_size")
+        deposit_gbp = booking.get("deposit_gbp", 0)
+
+        # All the slot-sets we'll emit — start with populating from metadata
+        # so downstream responses can reference {venue_id}, {party_size}, etc.
+        # Cast to the types domain.yml declares so Rasa doesn't reject.
+        def _to_float(v: Any) -> float | None:
+            if v is None or v == "":
+                return None
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+
+        slot_events: list[dict[str, Any]] = [
+            SlotSet("venue_id", str(venue_id) if venue_id is not None else None),
+            SlotSet("date", str(date) if date is not None else None),
+            SlotSet("time", str(time_slot) if time_slot is not None else None),
+            SlotSet("party_size", _to_float(party_size)),
+            SlotSet("deposit_gbp", _to_float(deposit_gbp)),
+        ]
+
+        # Required-field check
+        for field_name, value in [
+            ("venue_id", venue_id),
+            ("date", date),
+            ("time", time_slot),
+            ("party_size", party_size),
+        ]:
+            if value is None or value == "":
+                return slot_events + [SlotSet("validation_error", f"missing_{field_name}")]
+
+        # Cast numeric fields (they may arrive as strings from handoff JSON)
+        try:
+            party_int = int(float(party_size))
+        except (TypeError, ValueError):
+            return slot_events + [SlotSet("validation_error", "invalid_party_size")]
+
+        try:
+            deposit_int = int(float(deposit_gbp)) if deposit_gbp is not None else 0
+        except (TypeError, ValueError):
+            return slot_events + [SlotSet("validation_error", "invalid_deposit")]
+
+        # Rule checks
+        if party_int > MAX_PARTY_SIZE_FOR_AUTO_BOOKING:
+            return slot_events + [SlotSet("validation_error", "party_too_large")]
+
+        if deposit_int > MAX_DEPOSIT_FOR_AUTO_BOOKING_GBP:
+            return slot_events + [SlotSet("validation_error", "deposit_too_high")]
+
+        # Success — generate a deterministic booking reference
+        ref = (
+            "BK-"
+            + hashlib.sha1(f"{venue_id}|{date}|{time_slot}|{party_int}".encode())
+            .hexdigest()[:8]
+            .upper()
         )
+
+        return slot_events + [
+            SlotSet("validation_error", None),
+            SlotSet("booking_reference", ref),
+        ]

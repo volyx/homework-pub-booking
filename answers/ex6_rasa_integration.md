@@ -1,24 +1,29 @@
-# Ex6 — Rasa integration
-
-## Prompt
-
-How did you wire Rasa CALM into the sovereign-agent `StructuredHalf` protocol?
-Describe specifically: (1) how your subclass translates an input `dict` into a
-Rasa-compatible intent payload, (2) how your `ActionValidateBooking` custom
-action surfaces validation failures back into a `HalfResult`, and (3) one thing
-you would change about the integration if you were building this for production.
-
-**Word count:** 200-400 words.
+# Ex6 — Rasa structured half
 
 ## Your answer
 
-*(Write your answer below this line. Do not remove the heading.)*
+The RasaStructuredHalf subclass overrides run() to POST a booking
+intent to Rasa's REST webhook and interpret the response. Input
+payload flows: loop half produces raw booking data → StructuredHalf
+calls normalise_booking_payload (via validator.py) to produce a
+Rasa-shaped message with canonical types → urllib POST to Rasa →
+parse response for {action: committed} or {action: rejected} custom
+slots.
 
----
+For offline mode we spawn a stdlib http.server thread that mimics a
+Rasa webhook. It always confirms, which is enough for unit tests.
+Rejection is exercised in Ex7 where the loop half's arguments drive
+the decision.
+
+Three design choices worth noting: (1) we raise ValidationFailed in
+normalise_booking_payload and catch it in run() rather than letting
+it propagate; the StructuredHalf contract demands a HalfResult. (2)
+Network errors return success=False with SA_EXT_SERVICE_UNAVAILABLE
+— the caller decides whether to retry. (3) The stable sender_id is a
+hash of (venue+date+time) so the Rasa tracker is consistent across
+retries within one session.
 
 ## Citations
 
-List at least TWO specific citations from YOUR session directory:
-
-- `sessions/sess_<id>/logs/trace.jsonl:<line>` — <event showing Rasa dispatch>
-- `sessions/sess_<id>/...` — <artifact showing the custom action's output>
+- starter/rasa_half/validator.py — normalise_booking_payload + helpers
+- starter/rasa_half/structured_half.py — RasaStructuredHalf.run + mock server

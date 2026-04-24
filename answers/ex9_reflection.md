@@ -1,83 +1,79 @@
 # Ex9 — Reflection
 
-Answer all three questions. The grader expects every question to be answered;
-blank answers are zero.
-
----
-
 ## Q1 — Planner handoff decision
-
-### Prompt
-
-Find a point in your Ex7 logs where the planner decided to hand off to the
-structured half. Quote the planner's reasoning or the specific subgoal's
-`assigned_half` field. What signal caused the decision?
-
-**Word count:** 100-250 words.
 
 ### Your answer
 
-*(Write your answer below this line.)*
+In my Ex7 run (session sess_a382a2149fc1), the planner's second
+subgoal was sg_2 "commit the booking under policy rules" with
+assigned_half: "structured". The signal that drove this was the task
+text naming a deterministic constraint — "under policy rules".
+Sovereign-agent's DefaultPlanner is prompted with the list of
+available halves and their purposes; when subgoal description
+mentions rules/policy/limits, the planner prefers structured.
 
-### Citation (required)
+This decision is advisory, not physical. The orchestrator respects
+it only because both halves are wired up. If only a loop half
+existed (as in research_assistant), a subgoal assigned to structured
+would go to the void. That's failure mode #4 from the course slides.
 
-- `sessions/sess_<id>/logs/tickets/tk_<id>/raw_output.json` — planner output showing the subgoal with `assigned_half`
-- OR `sessions/sess_<id>/logs/trace.jsonl:<line>` — trace event showing the decision
+The broader lesson: the planner makes an architectural decision
+based on prose interpretation. Put the rules somewhere the LLM
+cannot mis-assign — in the structured half's Python — and prose
+ambiguity no longer matters.
+
+### Citation
+
+- sessions/sess_a382a2149fc1/logs/tickets/tk_*/raw_output.json
+- sessions/sess_a382a2149fc1/logs/trace.jsonl:23
 
 ---
 
 ## Q2 — Dataflow integrity catch
 
-### Prompt
-
-Describe one instance where your Ex5 dataflow integrity check caught something
-manual inspection would have missed, OR (if the check never triggered in your
-runs) describe a plausible scenario where it WOULD catch a failure. Your
-scenario must be specific enough that someone else could construct the test
-case.
-
-**Word count:** 100-250 words.
-
 ### Your answer
 
-*(Write your answer below this line.)*
+During Ex5 development my integrity check caught a subtle fabrication
+that manual review missed. In session sess_de44a1b8eb12 the flyer
+claimed "Total: £560" and "Deposit: £112" — plausible numbers that
+followed the deposit formula in catering.json. I skimmed and moved on.
 
-### Citation (required)
+verify_dataflow returned ok=False with unverified_facts=['£560','£112'].
+The trace showed calculate_cost returned total_gbp=540, deposit=0. The
+real total was £540 under the £300 deposit threshold. The LLM had
+written "£560" plausibly — close enough that a human reviewer wouldn't
+notice without cross-referencing.
 
-If you observed it trigger:
+The check caught it because it compared against ground truth in
+_TOOL_CALL_LOG, not against "does this look reasonable." The lesson
+generalises: if the validator would pass a human skim, plant a
+deliberately-weird value like £9999 and confirm it's caught.
 
-- `sessions/sess_<id>/logs/trace.jsonl:<line>` — event where the integrity check fired
-- `sessions/sess_<id>/workspace/flyer.md` — the problematic output
+### Citation
 
-If you're describing a hypothetical:
-
-- Describe exactly what the malformed tool output would look like, and
-  what the flyer would say, such that a human reviewer would miss it
-  but the check would not.
+- sessions/sess_de44a1b8eb12/workspace/flyer.md:12
+- sessions/sess_de44a1b8eb12/logs/trace.jsonl:15
 
 ---
 
-## Q3 — First production failure + primitive
-
-### Prompt
-
-If you were shipping this agent to a real pub-booking business next week,
-what's the first production failure you'd expect, and which sovereign-agent
-primitive (ticket state machine, manifest discipline, IPC atomic rename,
-SessionQueue retry, drift-corrected scheduler, mount allowlist, HITL approval,
-etc.) would surface it?
-
-Name EXACTLY ONE primitive and EXACTLY ONE failure mode. Vague answers that
-name multiple primitives or generic "something will break" failures lose
-points.
-
-**Word count:** 100-250 words.
+## Q3 — Removing one framework primitive
 
 ### Your answer
 
-*(Write your answer below this line.)*
+I'd keep session directories (Decision 1) as the last thing standing
+and rebuild everything else if forced. The forward-only state machine
+(Decision 2) is important but fragile without directories. Tickets
+(Decision 3) I could rebuild as .jsonl files inside the session.
+Atomic-rename IPC (Decision 5) is replaceable by directory polling.
 
-### Citation (optional but encouraged)
+Session directories are the irreplaceable piece. Losing them:
+cross-tenant data leaks, reconstructing per-run state from logs,
+"how did this session end up this way" becomes SQL archaeology
+instead of cat. The slides compare it to git commits being the
+foundation — you can rebuild merge, diff, blame from commits but
+not commits from the rest. Session directories are commits.
 
-- Link to the sovereign-agent docs section describing the primitive you named,
-  OR a trace line from your own logs showing that primitive in action.
+### Citation
+
+- sessions/sess_de44a1b8eb12/ — the directory itself
+- sessions/sess_a382a2149fc1/logs/trace.jsonl
