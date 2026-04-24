@@ -270,6 +270,46 @@ vars before calling out. Two possible causes:
    rasa train
    ```
 
+### "401 Incorrect API key provided" (embeddings trying to hit OpenAI)
+
+Full error looks like:
+
+```
+litellm.AuthenticationError: ... Incorrect API key provided:
+v1.CmMKH... You can find your API key at https://platform.openai.com/...
+```
+
+The key OpenAI is refusing is your Nebius key — which is correct, because
+Rasa shouldn't have called OpenAI at all. The cause is **embeddings
+config in the wrong place in `config.yml`**.
+
+Correct structure:
+
+```yaml
+pipeline:
+  - name: CompactLLMCommandGenerator
+    llm:
+      model_group: nebius_llm
+    flow_retrieval:           # ← embeddings must be nested HERE
+      embeddings:
+        model_group: nebius_embeddings
+```
+
+Wrong structure (what triggers the 401):
+
+```yaml
+pipeline:
+  - name: CompactLLMCommandGenerator
+    llm:
+      model_group: nebius_llm
+    embeddings:               # ← WRONG: sibling to llm, not under flow_retrieval
+      model_group: nebius_embeddings
+```
+
+Rasa silently falls back to its default OpenAI embeddings provider when
+the embeddings key isn't found where it expects, leading to the 401 against
+`api.openai.com`.
+
 ### "SingleStepLLMCommandGenerator is deprecated"
 
 Warning, not an error. Our `config.yml` uses the current name

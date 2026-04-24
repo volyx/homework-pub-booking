@@ -1,9 +1,12 @@
 # Rasa CALM pipeline — minimal config for Ex6.
 # Rasa Pro is required (CALM is Rasa Pro only).
 #
-# NOTE: LLM and embedding configuration live in endpoints.yml under
+# NOTE: LLM and embedding provider config lives in endpoints.yml under
 # `model_groups:` — this moved out of config.yml in Rasa 3.16+ and
 # defining LLM config inline here is deprecated (removed in Rasa 4.0).
+#
+# Here we ONLY reference model_groups by id. endpoints.yml is the source
+# of truth for which model + API base + key is actually used.
 
 recipe: default.v1
 language: en
@@ -11,19 +14,21 @@ assistant_id: homework-pub-booking
 
 pipeline:
   # CompactLLMCommandGenerator is the current default for Rasa CALM.
-  # SingleStepLLMCommandGenerator is deprecated in 3.16+ and removed
-  # in 4.0.
-  #
-  # `llm:` and `embeddings:` reference model_groups defined in
-  # endpoints.yml by id. This keeps LLM config in one place.
+  # SingleStepLLMCommandGenerator is deprecated in 3.16+ and removed in 4.0.
   - name: CompactLLMCommandGenerator
     llm:
       model_group: nebius_llm
-    embeddings:
-      model_group: nebius_embeddings
-    # Flow retrieval is on by default in 3.16; leaving as default.
-    # flow_retrieval:
-    #   active: true
+    # IMPORTANT: embeddings MUST be nested under flow_retrieval.
+    # Putting them as a top-level sibling to `llm:` is a common mistake
+    # — Rasa silently falls back to its default OpenAI embeddings
+    # provider, which fails with a 401 against Nebius keys.
+    flow_retrieval:
+      embeddings:
+        model_group: nebius_embeddings
+    # Default max user input is 420 chars; bumped so our programmatic
+    # handoff payloads (booking metadata as JSON) don't hit the limit.
+    user_input:
+      max_characters: 2000
 
 policies:
   - name: FlowPolicy

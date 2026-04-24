@@ -49,7 +49,12 @@ model_groups:
 
   - id: nebius_embeddings
     models:
-      - provider: self-hosted
+      # Note: provider is `openai` for embeddings even though we're on
+      # Nebius. Rasa's LiteLLM-backed embeddings client only understands
+      # the `openai` provider tag for OpenAI-compatible endpoints (Nebius
+      # speaks the OpenAI API). `self-hosted` works for the LLM but not
+      # for embeddings — this asymmetry is a known LiteLLM quirk.
+      - provider: openai
         model: Qwen/Qwen3-Embedding-8B
         api_base: "https://api.tokenfactory.nebius.com/v1"
         api_key: ${NEBIUS_KEY}
